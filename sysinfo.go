@@ -7,8 +7,8 @@ import (
 	"time"
  	"fmt"
     "errors"
- 	"github.com/shirou/gopsutil/cpu"
- 	"github.com/shirou/gopsutil/mem"
+ 	//"github.com/shirou/gopsutil/cpu"
+ 	//"github.com/shirou/gopsutil/mem"
  	//"github.com/shirou/gopsutil/disk"
 )
 
@@ -22,9 +22,9 @@ type IOInfo struct{
     IOMutex sync.Mutex
     iops int64
     mbps int64
-	nowTime int64
-	nowIOPS float64
-	nowMBPS float64
+    nowTime int64
+    nowIOPS float64
+    nowMBPS float64
 }
 
 var ioinfo = IOInfo{
@@ -34,14 +34,14 @@ var ioinfo = IOInfo{
 
 func GetState()([]float64){
 
-	sysInfo := make([]float64,2)
+    sysInfo := make([]float64,2)
 
-    cpuPer, _ := cpu.Percent(time.Second, false)
-    sysInfo[0] = cpuPer[0]
+    ////cpuPer, _ := cpu.Percent(time.Second, false)
+    ////sysInfo[0] = cpuPer[0]
     //fmt.Println(c)
-    memInfo,_ := mem.VirtualMemory()
+    ////memInfo,_ := mem.VirtualMemory()
     //fmt.Println(memInfo.UsedPercent)
-    sysInfo[1] = memInfo.UsedPercent
+    ////sysInfo[1] = memInfo.UsedPercent
    // parts,_ := disk.Partitions(true)
     //diskInfo,_ := disk.Usage(parts[0].Mountpoint)
     //fmt.Println(parts)
@@ -53,34 +53,45 @@ func GetState()([]float64){
 
 }
 
-func GetIOstartTime(bs int64)error{
+func IOStart(bs int64)error{
 
-    atomic.AddInt64(&ioinfo.sumIO,1)
-    atomic.AddInt64(&ioinfo.sumMB,bs)
-	nowtimeS := time.Now().Unix()
-	//fmt.Println(reflect.TypeOf(nowtimeS))
-    fmt.Println(nowtimeS)
+    nowtimeS := time.Now().Unix()
     ioinfo.IOMutex.Lock()
     if nowtimeS != ioinfo.nowTime{
         ioinfo.nowTime = nowtimeS
         ioinfo.iops = ioinfo.sumIO
         ioinfo.mbps = ioinfo.sumMB
-        ioinfo.sumIO = 0
-        ioinfo.sumMB = 0
+        atomic.StoreInt64(&ioinfo.sumIO,0)
+        atomic.StoreInt64(&ioinfo.sumMB,0)
     }
     ioinfo.IOMutex.Unlock()
-	return ErrGetTimeFailed
+	return nil
+}
+
+
+func IOEnd(bs int64)error{
+
+    atomic.AddInt64(&ioinfo.sumIO,1)
+    atomic.AddInt64(&ioinfo.sumMB,bs)
+    //fmt.Println(reflect.TypeOf(nowtimeS))
+
+    return nil
 }
 
 func GetIOps()(int64){
     return ioinfo.iops
 }
 
+func GetMBps()(int64){
+    return ioinfo.mbps
+}
 func main() {
 
-	//fmt.Println(GetState())
-	GetIOstartTime(64)
+	
+    IOStart(64)
+    IOEnd(64)
     GetIOps()
+    fmt.Println(GetIOps())
 
 }
 
