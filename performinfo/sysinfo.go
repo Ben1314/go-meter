@@ -1,114 +1,93 @@
 package performinfo
-//package main
+
 import (
-    //"reflect"
-    "sync"
+    "fmt"
     "time"
-    "errors"
+    "strconv"
+    "sync"
     "github.com/shirou/gopsutil/cpu"
     "github.com/shirou/gopsutil/mem"
-    //"github.com/shirou/gopsutil/disk"
 )
 
-var(
-    ErrGetTimeFailed = errors.New("Get time failed!")
+const (
+    ioWindow int64 = 3
 )
 
-type IOInfo struct{
-    sumIO int64
-    sumMB int64
-    IOMutex sync.Mutex
-    iops int64
-    mbps int64
-    nowTime int64
-    nowIOPS float64
-    nowMBPS float64
+type IOInfo struct {
+    // IOStime map[int64]int64
+    // IOEtime map[int64]int64
+    IObs int64
+    IOMutex sync.RWMutex
 }
 
-var ioinfo = IOInfo{
-    sumIO: 0,
-    nowTime: 0,
-}
+// var ioinfo = IOInfo {
+//     IOStime: make(map[int64]int64),
+//     IOEtime: make(map[int64]int64),
+// }
 
-func GetState()([]float64){
+var ioinfo IOInfo
+var IOCount = make(map[int64]int64)
 
-    sysInfo := make([]float64,2)
-
+func GetState()([]float64) {
+    sysInfo := make([]float64, 2)
     cpuPer, _ := cpu.Percent(time.Second, false)
     sysInfo[0] = cpuPer[0]
-    //fmt.Println(c)
-    memInfo,_ := mem.VirtualMemory()
-    //fmt.Println(memInfo.UsedPercent)
+    memInfo, _ := mem.VirtualMemory()
     sysInfo[1] = memInfo.UsedPercent
-   // parts,_ := disk.Partitions(true)
-    //diskInfo,_ := disk.Usage(parts[0].Mountpoint)
-    //fmt.Println(parts)
-    //fmt.Println(diskInfo.UsedPercent)
-    //ioc,_ := disk.IOCounters()
-    //fmt.Println(ioc)
 
     return sysInfo
 
 }
 
-func IOStart(bs int64)error{
-
+/*IOStart 目前没有实际的操作*/
+func IOStart(ioid int64) error {
+    // stime := time.Now().Unix()
+    // ioinfo.IOMutex.Lock()
+    // ioinfo.IOStime[ioid] = stime
+    // ioinfo.IOMutex.Unlock()
     return nil
 }
 
-func IOEnd(bs int64)error{
-
-    nowtimeS := time.Now().Unix()
+/*IOEnd 统计每一秒的IO个数*/
+func IOEnd(bs int64, ioid int64) error {
     ioinfo.IOMutex.Lock()
-    ioinfo.sumIO = ioinfo.sumIO + 1
-    ioinfo.sumMB = ioinfo.sumMB + bs
-
-    if nowtimeS != ioinfo.nowTime{
-        ioinfo.nowTime = nowtimeS
-        ioinfo.iops = ioinfo.sumIO
-        ioinfo.mbps = ioinfo.sumMB
-        ioinfo.sumIO = 0
-        ioinfo.sumMB = 0
+    if ioinfo.IObs == 0 {
+        ioinfo.IObs = bs
     }
+    etime := time.Now().Unix()
+    // ioinfo.IOEtime[ioid] = etime
+    IOCount[etime] += 1
     ioinfo.IOMutex.Unlock()
     return nil
 }
-/*Get latest second IOPS. */
-func GetIOps()(int64){
-    nowtimeS := time.Now().Unix()
-    if nowtimeS - ioinfo.nowTime > 1{
-        return 0
+
+/*获取IOPS*/
+func GetIOps() (float64) {
+    var i int64
+    var iops float64
+    nowtime := time.Now().Unix()
+    gettime := nowtime - 1
+    ioinfo.IOMutex.Lock()
+    for i = 0; i < ioWindow; i++ {
+        iops += float64(IOCount[gettime - i])
     }
-    return ioinfo.iops
+    ioinfo.IOMutex.Unlock()
+    value, _ := strconv.ParseFloat(fmt.Sprintf("%.2f", iops / float64(ioWindow)), 64)
+    return value
 }
 
-/*Get latest second MBPS. */
-func GetMBps()(int64){
-
-    nowtimeS := time.Now().Unix()
-    if nowtimeS - ioinfo.nowTime > 1{
-        return 0
+/*获取MBPS*/
+func GetMBps() (float64) {
+    var i int64
+    var mbps float64
+    nowtime := time.Now().Unix()
+    gettime := nowtime - 1
+    ioinfo.IOMutex.Lock()
+    for i = 0; i < ioWindow; i++ {
+        mbps += float64(ioinfo.IObs) * float64(IOCount[gettime - i])
     }
-    mbps := ioinfo.mbps/(1024*1024)
-    return mbps
+    delete(IOCount, gettime - ioWindow)
+    ioinfo.IOMutex.Unlock()
+    value, _ := strconv.ParseFloat(fmt.Sprintf("%.2f", mbps / float64(ioWindow * 1024 * 1024)), 64)
+    return value
 }
-/*func main() {
-
-    
-    IOStart(64)
-    IOEnd(64)
-    fmt.Println(GetIOps())
-
-}*/
-
-/*
- //For write function:提供给写 goroutine 的接口
- func GetIOstartTime(p *iostate, bz uint32)(err)
- func GetIOendTime(p *iostate)(err)
-
-
- //for user:提供给用户端功能的接口
- func GetIOps()(int)
- func Getmbps()(int)
- func GetState()([]float)//cpu,disk,mem等状态
- */

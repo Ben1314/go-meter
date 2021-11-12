@@ -43,13 +43,13 @@ func init() {
 	rootCmd.AddCommand(copyCmd)
 }
 
-//Write file with Lineage
+// Write file with Lineage
 func WriteFiles(i uint, masterBlock *[]uint64, wg *sync.WaitGroup) {
-	fileMask := uint64(i)
+	fileID := uint64(i)
 	fileSize, _ := strconv.Atoi(InputArgs.TotalSize)
 	blockSize, _ := strconv.Atoi(InputArgs.BlockSize)
-	filename := InputArgs.FilePath + "/" + strconv.FormatUint(fileMask, 10)
-	file := pipeline.NewFile(filename, fileSize, InputArgs.MasterMask, fileMask)
-	file.WriteFile(masterBlock, blockSize)
+	filename := InputArgs.FilePath + "/" + strconv.FormatUint(fileID, 10)
+	file := pipeline.NewFileForWrite(filename, fileSize, InputArgs.MasterMask)
+	file.WriteFile(masterBlock, blockSize, fileID)
 	wg.Done()
 }

@@ -1,77 +1,204 @@
 package pipeline
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"go-meter/performinfo"
 	"go-meter/randnum"
+	"io"
 	"log"
-	"math"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
 type File struct {
-	//wg *sync.WaitGroup
 	file       *os.File
 	fileSize   int
-	blockNum   int
-	basicBlock *basicBlock
+	masterMask uint64
 }
 
-func NewFile(filePath string, fileSize int, masterMask, fileMask uint64) *File {
-	//file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0766)
+func NewFileForWrite(filePath string, fileSize int, masterMask uint64) *File {
+	// file, err := os.OpenFile(filePath, os.O_RDWR|syscall.O_NONBLOCK|os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	file, err := os.Create(filePath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	randumState := randnum.RandomInit(fileMask)
-	basicBlock := BasicBlockInit(masterMask, fileMask, randumState)
-	blockNum := getBlockNum(fileSize)
 	return &File{
 		file,
 		fileSize,
-		blockNum,
-		basicBlock,
+		masterMask,
 	}
 }
 
-// 获取一个文件有多少个64K的block，向上取整
-func getBlockNum(fileSize int) int {
-	return int(math.Ceil(float64(fileSize) / float64(MasterBlockSize)))
+func NewFileForRead(filePath string, fileSize int, masterMask uint64) *File {
+	// f, _ := os.Stat(filePath)
+	// file, err := syscall.Open(filePath, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NONBLOCK, 0644)
+	file, err := os.OpenFile(filePath, os.O_RDWR|syscall.O_NONBLOCK, 0666)
+	// fileSize := int(f.Size())
+	if err != nil {
+		log.Fatal(err)
+	}
+	return &File{
+		file,
+		fileSize,
+		masterMask,
+	}
 }
 
-func (f *File) WriteFile(masterBlock *[]uint64, blockSize int) {
+func MasterMap(blockID, blockSize int) int {
+	fileOffset := blockID * blockSize
+	masterOffset := fileOffset % MasterBlockSize
+	return masterOffset
+}
+
+func (f *File) WriteFile(master *[]uint64, bs int, fileID uint64) {
 	start := time.Now()
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	times := int(math.Ceil(float64(f.fileSize) / float64(blockSize))) // 向上取整
-	var bufCap int
-	if blockSize > 65536{
-		bufCap = blockSize * 2
-	} else {
-		bufCap = 65536 * 2
-	}
-	buf := NewBuf(bufCap)
-	ch := make(chan *[]byte, 2)
+	var buffers [2][]byte
+	nblocks := f.fileSize / bs
+	rs := randnum.RandomInit(fileID)
+	fileMask := randnum.LCGRandom(rs)
+	blockMask := randnum.LCGRandom(rs)
+	mask := f.masterMask ^ fileMask
+	buffer1 := make([]byte, bs)
+	buffer2 := make([]byte, bs)
+	tempBuffer := make([]byte, 8)
 
-	// 生成数据
-	go func(){
-		for i:=0; i<times; i++{
-			f.basicBlock.generateBlock(ch, buf, masterBlock, blockSize, f.blockNum)
-		}
-	}()
-	// 写入数据
-	go func(){
-		for i:=0; i<times; i++{
-			f.basicBlock.writeBlock(ch, f.file, blockSize)
+	buffers[0] = buffer1
+	buffers[1] = buffer2
+
+	freeCh := make(chan int, 2)
+	freeCh <- 0
+	freeCh <- 1
+	defer close(freeCh)
+
+	readyCh := make(chan int, 2)
+	defer close(readyCh)
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
+	go func() {
+		for i := 0; i < nblocks; i++ {
+			bufferID := <-freeCh
+			myBuffer := buffers[bufferID]
+			masterOffset := MasterMap(i, bs)
+			for j := 0; j < bs; j += 8 {
+				if masterOffset+j >= MasterBlockSize {
+					masterOffset -= MasterBlockSize
+					blockMask = randnum.LCGRandom(rs)
+				}
+				binary.BigEndian.PutUint64(tempBuffer, (*master)[(masterOffset+j)/8]^mask^blockMask)
+				for index, value := range tempBuffer {
+					myBuffer[j+index] = value
+				}
+			}
+			readyCh <- bufferID
 		}
 		wg.Done()
 	}()
 
+	go func() {
+		var ioID int64
+		for i := 0; i < nblocks; i++ {
+			ioID = (int64(fileID)<<60 | int64(i))
+			bufferID := <-readyCh
+			myBuffer := buffers[bufferID]
+			performinfo.IOStart(ioID)
+			f.file.Write(myBuffer)
+			performinfo.IOEnd(int64(bs), ioID)
+			freeCh <- bufferID
+		}
+		wg.Done()
+	}()
 	wg.Wait()
 	err := f.file.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(time.Since(start))
+}
+
+func (f *File) ReadFile(bs int, fileID uint64) {
+	block := make([]byte, bs)
+	nblocks := f.fileSize / bs
+	for i := 0; i < nblocks; i++ {
+		ioID := int64(fileID) ^ int64(i)
+		performinfo.IOStart(ioID)
+		_, err := f.file.Read(block)
+		performinfo.IOEnd(int64(bs), ioID)
+		if err != nil && err != io.EOF {
+			panic(err)
+		}
+	}
+}
+
+func (f *File) CompareFile(master *[]uint64, bs int, fileID uint64) {
+	var buffers [2][]byte
+	nblocks := f.fileSize / bs
+	rs := randnum.RandomInit(fileID)
+	fileMask := randnum.LCGRandom(rs)
+	blockMask := randnum.LCGRandom(rs)
+	mask := f.masterMask ^ fileMask
+	buffer1 := make([]byte, bs)
+	buffer2 := make([]byte, bs)
+	tempBuffer := make([]byte, 8)
+
+	buffers[0] = buffer1
+	buffers[1] = buffer2
+
+	freeCh := make(chan int, 2)
+	freeCh <- 0
+	freeCh <- 1
+	defer close(freeCh)
+
+	readyCh := make(chan int, 2)
+	defer close(readyCh)
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
+	go func() {
+		for i := 0; i < nblocks; i++ {
+			bufferID := <-freeCh
+			myBuffer := buffers[bufferID]
+			masterOffset := MasterMap(i, bs)
+			for j := 0; j < bs; j += 8 {
+				if masterOffset+j >= MasterBlockSize {
+					masterOffset -= MasterBlockSize
+					blockMask = randnum.LCGRandom(rs)
+				}
+				binary.BigEndian.PutUint64(tempBuffer, (*master)[(masterOffset+j)/8]^mask^blockMask)
+				for index, value := range tempBuffer {
+					myBuffer[j+index] = value
+				}
+			}
+			readyCh <- bufferID
+		}
+		wg.Done()
+	}()
+
+	go func() {
+		block := make([]byte, bs)
+		for i := 0; i < nblocks; i++ {
+			bufferID := <-readyCh
+			myBuffer := buffers[bufferID]
+			_, err := f.file.Read(block)
+			if !bytes.Equal(block, myBuffer) {
+				log.Fatal("Data is inconsistent!!!")
+			}
+			if err != nil && err != io.EOF {
+				panic(err)
+			}
+			freeCh <- bufferID
+		}
+		wg.Done()
+	}()
+	wg.Wait()
+	err := f.file.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
 }
