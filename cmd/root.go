@@ -15,10 +15,12 @@ import (
 
 var InputArgs struct {
 	Lineage    []uint
+	JobNum     int
 	BlockSize  string
 	TotalSize  string
 	MasterMask uint64
 	FilePath   string
+	DevicePath string
 }
 
 // rootCmd represents the base command when called without any subcommands
@@ -42,15 +44,19 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().UintSliceVarP(&InputArgs.Lineage, "lineage", "l", nil, "Start Lineage,End Lineage")
+	rootCmd.PersistentFlags().IntVarP(&InputArgs.JobNum, "job", "j", 0, "Job Num")
 	rootCmd.PersistentFlags().StringVarP(&InputArgs.TotalSize, "tsize", "t", "", "Total Size")
 	rootCmd.PersistentFlags().StringVarP(&InputArgs.BlockSize, "bsize", "b", "", "Block Size")
 	rootCmd.PersistentFlags().StringVarP(&InputArgs.FilePath, "path", "p", "", "FilePath")
+	rootCmd.PersistentFlags().StringVarP(&InputArgs.DevicePath, "device", "d", "", "DevicePath")
 	rootCmd.PersistentFlags().Uint64VarP(&InputArgs.MasterMask, "mask", "m", 0, "Master Mask")
 
 	viper.BindPFlag("TotalSize", rootCmd.PersistentFlags().Lookup("tsize"))
+	viper.BindPFlag("JobNum", rootCmd.PersistentFlags().Lookup("job"))
 	viper.BindPFlag("BlockSize", rootCmd.PersistentFlags().Lookup("bsize"))
 	viper.BindPFlag("MasterMask", rootCmd.PersistentFlags().Lookup("mask"))
 	viper.BindPFlag("FilePath", rootCmd.PersistentFlags().Lookup("path"))
+	viper.BindPFlag("DevicePath", rootCmd.PersistentFlags().Lookup("device"))
 	viper.BindPFlag("Lineage", rootCmd.PersistentFlags().Lookup("lineage"))
 }
 
@@ -79,9 +85,11 @@ func initConfig() {
 
 	// read config from yaml file
 	viper.UnmarshalKey("TotalSize", &InputArgs.TotalSize)
+	viper.UnmarshalKey("JobNum", &InputArgs.JobNum)
 	viper.UnmarshalKey("BlockSize", &InputArgs.BlockSize)
 	viper.UnmarshalKey("MasterMask", &InputArgs.MasterMask)
 	viper.UnmarshalKey("FilePath", &InputArgs.FilePath)
+	viper.UnmarshalKey("DevicePath", &InputArgs.DevicePath)
 	viper.UnmarshalKey("Lineage", &InputArgs.Lineage)
 
 	// fmt.Println("Total Size:", viper.GetString("TotalSize"))
@@ -135,6 +143,24 @@ func checkInputArgs() {
 	}
 	if InputArgs.Lineage[0] > InputArgs.Lineage[1] {
 		fmt.Println("Start Lineage cannot be greater than End Lineage.")
+		os.Exit(1)
+	}
+}
+
+func checkBlockArgs() {
+	InputArgs.BlockSize = checkSize(InputArgs.BlockSize, "Block")
+	InputArgs.TotalSize = checkSize(InputArgs.TotalSize, "Total File")
+	if InputArgs.JobNum == 0 {
+		fmt.Println("Please input correct number of job (JobNum).")
+		os.Exit(1)
+	}
+}
+
+func checkCompareCondition() {
+	InputArgs.BlockSize = checkSize(InputArgs.BlockSize, "Block")
+	InputArgs.TotalSize = checkSize(InputArgs.TotalSize, "Total File")
+	if InputArgs.JobNum == 0 {
+		fmt.Println("Please input correct number of job (JobNum).")
 		os.Exit(1)
 	}
 }
